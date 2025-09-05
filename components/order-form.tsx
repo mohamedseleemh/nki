@@ -1,71 +1,76 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { LoadingSpinner } from "@/components/ui/loading-spinner"
+import { ErrorMessage } from "@/components/ui/error-message"
 import { MessageCircle, Shield, Truck, CreditCard, CheckCircle } from "lucide-react"
-import { orderService } from "@/lib/supabase"
+import { validateOrder } from "@/lib/validations"
+import { config } from "@/lib/config"
+import type { OrderFormData, FormErrors } from "@/lib/types"
 
-interface OrderFormData {
-  name: string
-  phone: string
-  address: string
-  notes: string
+interface OrderFormProps {
+  onSubmit?: (data: OrderFormData) => void
+  loading?: boolean
 }
 
-export function OrderForm() {
+export function OrderForm({ onSubmit, loading: externalLoading }: OrderFormProps) {
   const [orderForm, setOrderForm] = useState<OrderFormData>({
-    name: "",
-    phone: "",
-    address: "",
-    notes: "",
+    customer_name: "",
+    customer_phone: "",
+    customer_address: "",
+    customer_notes: "",
   })
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [errors, setErrors] = useState<Partial<OrderFormData>>({})
+  const [internalLoading, setInternalLoading] = useState(false)
+  const [errors, setErrors] = useState<FormErrors>({})
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
-  const validateForm = () => {
-    const newErrors: Partial<OrderFormData> = {}
-
-    if (!orderForm.name.trim()) {
-      newErrors.name = "الاسم مطلوب"
-    }
-
-    if (!orderForm.phone.trim()) {
-      newErrors.phone = "رقم الهاتف مطلوب"
-    } else if (!/^01[0-9]{9}$/.test(orderForm.phone.replace(/\s/g, ""))) {
-      newErrors.phone = "رقم الهاتف غير صحيح"
-    }
-
-    if (!orderForm.address.trim()) {
-      newErrors.address = "العنوان مطلوب"
-    }
-
-    setErrors(newErrors)
-    return Object.keys(newErrors).length === 0
-  }
+  const isSubmitting = externalLoading || internalLoading
 
   const handleOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setSubmitError(null)
+    setErrors({})
 
-    if (!validateForm()) {
+    // Validate form data
+    const validation = validateOrder(orderForm)
+    if (!validation.success) {
+      const formErrors: FormErrors = {}
+      validation.error.errors.forEach((error) => {
+        const field = error.path.join('.')
+        formErrors[field] = error.message
+      })
+      setErrors(formErrors)
       return
     }
 
-    setIsSubmitting(true)
+    // If external onSubmit is provided, use it
+    if (onSubmit) {
+      onSubmit(validation.data)
+      return
+    }
+
+    // Otherwise, handle submission internally
+    setInternalLoading(true)
 
     try {
-      // حفظ الطلب في قاعدة البيانات
-      await orderService.createOrder({
-        customer_name: orderForm.name,
-        customer_phone: orderForm.phone,
-        customer_address: orderForm.address,
-        customer_notes: orderForm.notes,
-        status: "جديد",
+      const response = await fetch('/api/orders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(validation.data),
       })
+
+      const result = await response.json()
+
+      if (!result.success) {
+        throw new Error(result.error || 'فشل في إرسال الطلب')
+      }
 
       // إنشاء رسالة واتساب
       const whatsappMessage = `مرحباً، تم تسجيل طلبي بنجاح:
@@ -74,25 +79,38 @@ export function OrderForm() {
 💰 السعر: 350 جنيه (شحن مجاني)
 
 📋 بيانات الطلب:
-الاسم: ${orderForm.name}
-الهاتف: ${orderForm.phone}
-العنوان: ${orderForm.address}
-${orderForm.notes ? `ملاحظات: ${orderForm.notes}` : ""}
+الاسم: ${orderForm.customer_name}
+الهاتف: ${orderForm.customer_phone}
+العنوان: ${orderForm.customer_address}
+${orderForm.customer_notes ? `ملاحظات: ${orderForm.customer_notes}` : ""}
 
 شكراً لثقتكم في منتجاتنا! 💕`
 
-      const whatsappUrl = `https://wa.me/201556133633?text=${encodeURIComponent(whatsappMessage)}`
+      const whatsappUrl = `https://wa.me/${config.whatsapp.number}?text=${encodeURIComponent(whatsappMessage)}`
       window.open(whatsappUrl, "_blank")
 
       // إعادة تعيين النموذج
-      setOrderForm({ name: "", phone: "", address: "", notes: "" })
+      setOrderForm({ 
+        customer_name: "", 
+        customer_phone: "", 
+        customer_address: "", 
+        customer_notes: "" 
+      })
       setErrors({})
       alert("تم تسجيل طلبك بنجاح! سنتواصل معك قريباً 💕")
     } catch (error) {
       console.error("Error submitting order:", error)
-      alert("حدث خطأ في تسجيل الطلب. يرجى المحاولة مرة أخرى")
+      setSubmitError(error instanceof Error ? error.message : "حدث خطأ في تسجيل الطلب")
     } finally {
-      setIsSubmitting(false)
+      setInternalLoading(false)
+    }
+  }
+
+  const handleInputChange = (field: keyof OrderFormData, value: string) => {
+    setOrderForm(prev => ({ ...prev, [field]: value }))
+    // Clear error when user starts typing
+    if (errors[field]) {
+      setErrors(prev => ({ ...prev, [field]: undefined }))
     }
   }
 
@@ -116,6 +134,8 @@ ${orderForm.notes ? `ملاحظات: ${orderForm.notes}` : ""}
           </div>
         </div>
 
+        {submitError && <ErrorMessage message={submitError} className="mb-6" />}
+
         <Card className="shadow-2xl border-0 card-elegant hover-lift">
           <CardContent className="p-8">
             <form onSubmit={handleOrderSubmit} className="space-y-6">
@@ -123,16 +143,17 @@ ${orderForm.notes ? `ملاحظات: ${orderForm.notes}` : ""}
                 <label className="block text-sm font-medium mb-2">الاسم الكامل *</label>
                 <Input
                   required
-                  value={orderForm.name}
+                  value={orderForm.customer_name}
                   onChange={(e) => {
-                    setOrderForm({ ...orderForm, name: e.target.value })
-                    if (errors.name) setErrors({ ...errors, name: undefined })
+                    handleInputChange('customer_name', e.target.value)
                   }}
                   placeholder="أدخل اسمك الكامل"
-                  className={`text-lg py-6 border-2 transition-colors ${errors.name ? "border-red-500 focus:border-red-500" : "focus:border-primary"}`}
+                  className={`text-lg py-6 border-2 transition-colors ${
+                    errors.customer_name ? "border-red-500 focus:border-red-500" : "focus:border-primary"
+                  }`}
                   disabled={isSubmitting}
                 />
-                {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
+                {errors.customer_name && <p className="text-red-500 text-sm mt-1">{errors.customer_name}</p>}
               </div>
 
               <div>
@@ -140,39 +161,41 @@ ${orderForm.notes ? `ملاحظات: ${orderForm.notes}` : ""}
                 <Input
                   required
                   type="tel"
-                  value={orderForm.phone}
+                  value={orderForm.customer_phone}
                   onChange={(e) => {
-                    setOrderForm({ ...orderForm, phone: e.target.value })
-                    if (errors.phone) setErrors({ ...errors, phone: undefined })
+                    handleInputChange('customer_phone', e.target.value)
                   }}
                   placeholder="01xxxxxxxxx"
-                  className={`text-lg py-6 border-2 transition-colors ${errors.phone ? "border-red-500 focus:border-red-500" : "focus:border-primary"}`}
+                  className={`text-lg py-6 border-2 transition-colors ${
+                    errors.customer_phone ? "border-red-500 focus:border-red-500" : "focus:border-primary"
+                  }`}
                   disabled={isSubmitting}
                 />
-                {errors.phone && <p className="text-red-500 text-sm mt-1">{errors.phone}</p>}
+                {errors.customer_phone && <p className="text-red-500 text-sm mt-1">{errors.customer_phone}</p>}
               </div>
 
               <div>
                 <label className="block text-sm font-medium mb-2">العنوان بالتفصيل *</label>
                 <Textarea
                   required
-                  value={orderForm.address}
+                  value={orderForm.customer_address}
                   onChange={(e) => {
-                    setOrderForm({ ...orderForm, address: e.target.value })
-                    if (errors.address) setErrors({ ...errors, address: undefined })
+                    handleInputChange('customer_address', e.target.value)
                   }}
                   placeholder="المحافظة، المدينة، الشارع، رقم المبنى..."
-                  className={`min-h-24 border-2 transition-colors arabic-text ${errors.address ? "border-red-500 focus:border-red-500" : "focus:border-primary"}`}
+                  className={`min-h-24 border-2 transition-colors arabic-text ${
+                    errors.customer_address ? "border-red-500 focus:border-red-500" : "focus:border-primary"
+                  }`}
                   disabled={isSubmitting}
                 />
-                {errors.address && <p className="text-red-500 text-sm mt-1">{errors.address}</p>}
+                {errors.customer_address && <p className="text-red-500 text-sm mt-1">{errors.customer_address}</p>}
               </div>
 
               <div>
                 <label className="block text-sm font-medium mb-2">ملاحظات إضافية</label>
                 <Textarea
-                  value={orderForm.notes}
-                  onChange={(e) => setOrderForm({ ...orderForm, notes: e.target.value })}
+                  value={orderForm.customer_notes}
+                  onChange={(e) => handleInputChange('customer_notes', e.target.value)}
                   placeholder="أي ملاحظات خاصة بالطلب..."
                   className="min-h-20 border-2 focus:border-primary arabic-text"
                   disabled={isSubmitting}
@@ -211,8 +234,17 @@ ${orderForm.notes ? `ملاحظات: ${orderForm.notes}` : ""}
                 className="w-full text-lg py-6 btn-gradient shadow-glow hover-lift"
                 disabled={isSubmitting}
               >
-                {isSubmitting ? "جاري التسجيل..." : "تأكيد الطلب عبر واتساب"}
-                <MessageCircle className="w-5 h-5 mr-2" />
+                {isSubmitting ? (
+                  <>
+                    <LoadingSpinner size="sm" className="ml-2" />
+                    جاري التسجيل...
+                  </>
+                ) : (
+                  <>
+                    تأكيد الطلب عبر واتساب
+                    <MessageCircle className="w-5 h-5 mr-2" />
+                  </>
+                )}
               </Button>
             </form>
           </CardContent>
