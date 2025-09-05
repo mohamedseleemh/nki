@@ -3,7 +3,6 @@
 import { motion } from "framer-motion"
 import { useInView } from "react-intersection-observer"
 import { Sparkles, Heart, Star, Zap } from "lucide-react"
-import Image from "next/image"
 
 export function EnhancedHeroSection() {
   const [ref, inView] = useInView({
@@ -121,12 +120,10 @@ export function EnhancedHeroSection() {
             <div className="relative w-64 h-80 mx-auto">
               <div className="absolute inset-0 bg-gradient-to-br from-pink-200/50 to-purple-200/50 rounded-3xl blur-xl transform rotate-6" />
               <div className="relative bg-white rounded-3xl p-6 shadow-2xl transform -rotate-3 hover:rotate-0 transition-transform duration-500">
-                <Image
-                  src="/keeka-product-1.jpg"
+                <img
+                  src="https://images.unsplash.com/photo-1556228720-195a672e8a03?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&q=80"
                   alt="كيكه سيروم فيتامين سي"
-                  width={200}
-                  height={280}
-                  className="w-full h-full object-contain"
+                  className="w-full h-64 object-cover rounded-2xl"
                 />
               </div>
             </div>
