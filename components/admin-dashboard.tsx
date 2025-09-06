@@ -1,11 +1,14 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { orderService } from "@/lib/supabase"
+import { useOrders } from "@/lib/hooks/use-orders"
+import { maskPhoneNumber, formatPhoneForWhatsApp } from "@/lib/utils/phone-utils"
+import { ErrorMessage } from "@/components/ui/error-message"
+import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { RefreshCw, Package, Clock, CheckCircle, XCircle, Search, Download, Phone, MessageCircle } from "lucide-react"
 import type { Order } from "@/lib/types"
 
@@ -14,74 +17,61 @@ interface AdminDashboardProps {
 }
 
 export function AdminDashboard({ onBack }: AdminDashboardProps) {
-  const [orders, setOrders] = useState<Order[]>([])
+  const { orders, loading, error, refetch, updateOrderStatus, deleteOrder } = useOrders()
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([])
   const [activeTab, setActiveTab] = useState("dashboard")
-  const [loading, setLoading] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
 
+  // تصفية الطلبات باستخدام useMemo لتحسين الأداء
   useEffect(() => {
-    loadOrders()
-  }, [])
-
-  useEffect(() => {
-    let filtered = orders
-
-    if (searchTerm) {
-      filtered = filtered.filter(
-        (order) =>
-          order.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          order.customer_phone.includes(searchTerm) ||
-          order.customer_address.toLowerCase().includes(searchTerm.toLowerCase()),
-      )
-    }
-
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((order) => order.status === statusFilter)
-    }
-
-    setFilteredOrders(filtered)
+    setFilteredOrders(filteredOrdersData)
   }, [orders, searchTerm, statusFilter])
 
-  const loadOrders = async () => {
-    setLoading(true)
-    try {
-      const data = await orderService.getAllOrders()
-      setOrders(data)
-    } catch (error) {
-      console.error("Error loading orders:", error)
-      alert("حدث خطأ في تحميل الطلبات")
-    } finally {
-      setLoading(false)
-    }
-  }
+  const filteredOrdersData = useMemo(() => {
+    return orders.filter(order => {
+      const matchesSearch = !searchTerm || 
+        order.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        order.customer_phone.includes(searchTerm) ||
+        order.customer_address.toLowerCase().includes(searchTerm.toLowerCase())
+      
+      const matchesStatus = statusFilter === "all" || order.status === statusFilter
+      
+      return matchesSearch && matchesStatus
+    })
+  }, [orders, searchTerm, statusFilter])
 
-  const updateOrderStatus = async (orderId: string, newStatus: Order["status"]) => {
+  // تحسين معالجة تحديث حالة الطلب
+  const handleUpdateOrderStatus = async (orderId: string, newStatus: Order["status"]) => {
+    setActionLoading(orderId)
     try {
-      await orderService.updateOrderStatus(orderId, newStatus)
-      loadOrders()
-      alert("تم تحديث حالة الطلب بنجاح")
+      await updateOrderStatus(orderId, newStatus)
     } catch (error) {
       console.error("Error updating order:", error)
       alert("حدث خطأ في تحديث الطلب")
+    } finally {
+      setActionLoading(null)
     }
   }
 
-  const deleteOrder = async (orderId: string) => {
+  // تحسين معالجة حذف الطلب
+  const handleDeleteOrder = async (orderId: string) => {
     if (!confirm("هل تريد حذف هذا الطلب نهائياً؟")) return
 
+    setActionLoading(orderId)
     try {
-      await orderService.deleteOrder(orderId)
-      loadOrders()
-      alert("تم حذف الطلب بنجاح")
+      await deleteOrder(orderId)
     } catch (error) {
       console.error("Error deleting order:", error)
       alert("حدث خطأ في حذف الطلب")
+    } finally {
+      setActionLoading(null)
     }
   }
 
-  const stats = {
+  // حساب الإحصائيات باستخدام useMemo
+  const stats = useMemo(() => ({
     total: orders.length,
     new: orders.filter((o) => o.status === "جديد").length,
     processing: orders.filter((o) => o.status === "قيد التجهيز").length,
@@ -93,47 +83,49 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
       return today === orderDate
     }).length,
     totalRevenue: orders.filter((o) => o.status === "تم التوصيل").length * 350,
-  }
+  }), [orders])
 
+  // تحسين تصدير البيانات
   const exportOrders = () => {
-    const csvContent = [
-      ["رقم الطلب", "الاسم", "الهاتف", "العنوان", "الحالة", "التاريخ", "الملاحظات"],
-      ...filteredOrders.map((order) => [
-        order.id,
-        order.customer_name,
-        order.customer_phone,
-        order.customer_address,
-        order.status,
-        new Date(order.created_at).toLocaleDateString("ar-EG"),
-        order.customer_notes || "",
-      ]),
-    ]
-      .map((row) => row.join(","))
-      .join("\n")
+    try {
+      const csvContent = [
+        ["رقم الطلب", "الاسم", "الهاتف", "العنوان", "الحالة", "التاريخ", "الملاحظات"],
+        ...filteredOrders.map((order) => [
+          order.id.slice(0, 8),
+          order.customer_name,
+          order.customer_phone,
+          order.customer_address.replace(/,/g, ';'), // استبدال الفواصل لتجنب مشاكل CSV
+          order.status,
+          new Date(order.created_at).toLocaleDateString("ar-EG"),
+          (order.customer_notes || "").replace(/,/g, ';'),
+        ]),
+      ]
+        .map((row) => row.map(cell => `"${cell}"`).join(",")) // تغليف الخلايا بعلامات اقتباس
+        .join("\n")
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
-    const link = document.createElement("a")
-    link.href = URL.createObjectURL(blob)
-    link.download = `orders_${new Date().toISOString().split("T")[0]}.csv`
-    link.click()
+      const blob = new Blob(['\ufeff' + csvContent], { type: "text/csv;charset=utf-8;" }) // إضافة BOM للدعم العربي
+      const link = document.createElement("a")
+      link.href = URL.createObjectURL(blob)
+      link.download = `orders_${new Date().toISOString().split("T")[0]}.csv`
+      link.click()
+      
+      // تنظيف الذاكرة
+      setTimeout(() => URL.revokeObjectURL(link.href), 100)
+    } catch (error) {
+      console.error("Error exporting orders:", error)
+      alert("حدث خطأ في تصدير البيانات")
+    }
   }
 
-  const getStatusBadge = (status: Order["status"]) => {
-    const statusConfig = {
-      جديد: { variant: "default" as const, icon: Package, color: "bg-blue-500" },
-      "قيد التجهيز": { variant: "secondary" as const, icon: Clock, color: "bg-yellow-500" },
-      "تم التوصيل": { variant: "default" as const, icon: CheckCircle, color: "bg-green-500" },
-      ملغي: { variant: "destructive" as const, icon: XCircle, color: "bg-red-500" },
-    }
-
-    const config = statusConfig[status]
-    const Icon = config.icon
-
+  // عرض حالة التحميل
+  if (loading && orders.length === 0) {
     return (
-      <Badge variant={config.variant} className="gap-1">
-        <Icon className="w-3 h-3" />
-        {status}
-      </Badge>
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <LoadingSpinner size="lg" className="mx-auto mb-4" />
+          <p className="text-muted-foreground">جاري تحميل البيانات...</p>
+        </div>
+      </div>
     )
   }
 
@@ -183,7 +175,7 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-bold">إحصائيات سريعة</h2>
               <Button
-                onClick={loadOrders}
+                onClick={refetch}
                 variant="outline"
                 className="gap-2 bg-transparent hover-lift"
                 disabled={loading}
@@ -240,6 +232,7 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pr-10 w-full md:w-64"
+                    disabled={loading}
                   />
                 </div>
 
@@ -261,7 +254,7 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
                 </Button>
 
                 <Button
-                  onClick={loadOrders}
+                  onClick={refetch}
                   variant="outline"
                   className="gap-2 bg-transparent hover-lift"
                   disabled={loading}
@@ -271,6 +264,8 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
                 </Button>
               </div>
             </div>
+
+            {error && <ErrorMessage message={error} className="mb-6" />}
 
             <Card className="shadow-lg hover-lift">
               <CardContent className="p-0">
@@ -294,12 +289,13 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
                           <td className="p-4 font-medium">{order.customer_name}</td>
                           <td className="p-4">
                             <div className="flex items-center gap-2">
-                              <span className="font-mono">{order.customer_phone}</span>
+                              <span className="font-mono">{maskPhoneNumber(order.customer_phone)}</span>
                               <Button
                                 size="sm"
                                 variant="outline"
                                 onClick={() => window.open(`tel:${order.customer_phone}`, "_self")}
                                 className="p-1 h-6 w-6"
+                                disabled={actionLoading === order.id}
                               >
                                 <Phone className="w-3 h-3" />
                               </Button>
@@ -318,8 +314,9 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
                           <td className="p-4">
                             <select
                               value={order.status}
-                              onChange={(e) => updateOrderStatus(order.id, e.target.value as Order["status"])}
+                              onChange={(e) => handleUpdateOrderStatus(order.id, e.target.value as Order["status"])}
                               className="border rounded-lg p-2 bg-white focus:border-primary focus:ring-1 focus:ring-primary text-sm"
+                              disabled={actionLoading === order.id}
                             >
                               <option value="جديد">جديد</option>
                               <option value="قيد التجهيز">قيد التجهيز</option>
@@ -340,21 +337,31 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
                             <div className="flex gap-2">
                               <Button
                                 onClick={() =>
-                                  window.open(`https://wa.me/2${order.customer_phone.replace(/^0/, "")}`, "_blank")
+                                  window.open(`https://wa.me/${formatPhoneForWhatsApp(order.customer_phone)}`, "_blank")
                                 }
                                 variant="outline"
                                 size="sm"
                                 className="gap-1 text-green-600 hover:bg-green-50"
+                                disabled={actionLoading === order.id}
                               >
-                                <MessageCircle className="w-3 h-3" />
+                                {actionLoading === order.id ? (
+                                  <LoadingSpinner size="sm" />
+                                ) : (
+                                  <MessageCircle className="w-3 h-3" />
+                                )}
                               </Button>
                               <Button
-                                onClick={() => deleteOrder(order.id)}
+                                onClick={() => handleDeleteOrder(order.id)}
                                 variant="destructive"
                                 size="sm"
                                 className="gap-1"
+                                disabled={actionLoading === order.id}
                               >
-                                <XCircle className="w-3 h-3" />
+                                {actionLoading === order.id ? (
+                                  <LoadingSpinner size="sm" />
+                                ) : (
+                                  <XCircle className="w-3 h-3" />
+                                )}
                               </Button>
                             </div>
                           </td>

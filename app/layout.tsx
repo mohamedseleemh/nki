@@ -4,6 +4,7 @@ import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
 import { Analytics } from "@vercel/analytics/next"
 import { Suspense } from "react"
+import { ErrorBoundary } from "@/components/ui/error-boundary"
 import "./globals.css"
 
 export const metadata: Metadata = {
@@ -50,20 +51,22 @@ html {
         <meta name="theme-color" content="#D5006D" />
       </head>
       <body className="font-sans antialiased">
-        <Suspense
-          fallback={
-            <div className="min-h-screen flex items-center justify-center">
-              <div className="text-center">
-                <div className="w-12 h-12 bg-gradient-to-br from-primary to-secondary rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
-                  <span className="text-white font-bold">S</span>
+        <ErrorBoundary>
+          <Suspense
+            fallback={
+              <div className="min-h-screen flex items-center justify-center">
+                <div className="text-center">
+                  <div className="w-12 h-12 bg-gradient-to-br from-primary to-secondary rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+                    <span className="text-white font-bold">S</span>
+                  </div>
+                  <p className="text-muted-foreground">جاري التحميل...</p>
                 </div>
-                <p className="text-muted-foreground">جاري التحميل...</p>
               </div>
-            </div>
-          }
-        >
-          {children}
-        </Suspense>
+            }
+          >
+            {children}
+          </Suspense>
+        </ErrorBoundary>
         <Analytics />
       </body>
     </html>
